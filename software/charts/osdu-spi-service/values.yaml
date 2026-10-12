@@ -73,6 +73,9 @@ volumeMounts: []
 
 volumes: []
 
+podSecurityContext:
+  fsGroup: null
+
 # -- Stamps the azure.workload.identity/use pod label.
 workloadIdentity: true
 

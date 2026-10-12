@@ -45,6 +45,9 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+        {{- with .Values.podSecurityContext.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
 
       {{- if .Values.topologySpread }}
       topologySpreadConstraints:

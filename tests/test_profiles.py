@@ -737,6 +737,7 @@ class TestIndexerRuntime:
         assert runtime["securityContext"]["runAsNonRoot"] is True
         assert runtime["securityContext"]["allowPrivilegeEscalation"] is False
         assert runtime["securityContext"]["capabilities"]["drop"] == ["ALL"]
+        assert values["podSecurityContext"]["fsGroup"] == 1000
         assert env["JAVA_HOME"] == "/java-runtime"
         assert env["PATH"].startswith("/java-runtime/bin:")
         assert values["volumeMounts"] == [

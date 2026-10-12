@@ -45,6 +45,8 @@ spec:
         effect: NoSchedule
     istioProxyPin:
       enabled: true
+    podSecurityContext:
+      fsGroup: 1000
     initContainers:
       - name: install-java-runtime
         image: eclipse-temurin:25-jre-alpine
