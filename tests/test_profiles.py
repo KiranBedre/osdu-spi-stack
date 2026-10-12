@@ -723,7 +723,7 @@ class TestAutomatedGatewayDeployment:
         assert "spi-gateway-tls" not in _dependency_names(INGRESS_DIR / mode)
 
 class TestJavaRuntime:
-    @pytest.mark.parametrize("service", ["indexer", "legal"])
+    @pytest.mark.parametrize("service", ["indexer", "legal", "storage"])
     def test_java_runtime_matches_upstream_bytecode(self, service):
         release = yaml.safe_load(
             (STACKS / "services" / f"{service}.yaml").read_text(encoding="utf-8")
