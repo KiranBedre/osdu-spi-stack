@@ -53,7 +53,7 @@ spec:
         command:
           - sh
           - -c
-          - cp -a "$JAVA_HOME/." /java-runtime/
+          - cp -R "$JAVA_HOME/." /java-runtime/
         volumeMounts:
           - name: java-runtime
             mountPath: /java-runtime
