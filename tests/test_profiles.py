@@ -722,9 +722,12 @@ class TestAutomatedGatewayDeployment:
         assert "deletionPolicy" not in owner["spec"]
         assert "spi-gateway-tls" not in _dependency_names(INGRESS_DIR / mode)
 
-class TestIndexerRuntime:
-    def test_java_runtime_matches_upstream_bytecode(self):
-        release = yaml.safe_load((STACKS / "services" / "indexer.yaml").read_text(encoding="utf-8"))
+class TestJavaRuntime:
+    @pytest.mark.parametrize("service", ["indexer", "legal"])
+    def test_java_runtime_matches_upstream_bytecode(self, service):
+        release = yaml.safe_load(
+            (STACKS / "services" / f"{service}.yaml").read_text(encoding="utf-8")
+        )
         values = release["spec"]["values"]
         env = {item["name"]: item["value"] for item in values["env"]}
         runtime = next(
