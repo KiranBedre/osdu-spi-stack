@@ -722,6 +722,7 @@ class TestAutomatedGatewayDeployment:
         assert "deletionPolicy" not in owner["spec"]
         assert "spi-gateway-tls" not in _dependency_names(INGRESS_DIR / mode)
 
+
 class TestJavaRuntime:
     @pytest.mark.parametrize("service", ["indexer", "legal", "storage"])
     def test_java_runtime_matches_upstream_bytecode(self, service):

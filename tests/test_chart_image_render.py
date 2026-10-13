@@ -132,6 +132,7 @@ def test_requests_the_cpu_admission_will_grant_every_container():
         requested = container["resources"]["requests"]["cpu"]
         assert _millicores(requested) >= 100, container["name"]
 
+
 def test_service_run_as_user_is_configurable():
     deployment = _rendered_deployment({"runAsUser": "999"})
 
