@@ -18,6 +18,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: osdu
 {{- end }}
 
+{{/* Legal and members Jobs consume the core release's scripts ConfigMap.
+     Workflow registration owns a separate ConfigMap so its release can
+     reconcile independently. */}}
+{{- define "osdu-spi-init.scriptsName" -}}
+{{- if .Values.workflowsEnabled -}}
+{{- printf "%s-scripts" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else -}}
+osdu-spi-init-scripts
+{{- end -}}
+{{- end }}
+
 {{/* Shared pod-spec fragment used by every Job. The Workload Identity webhook
      injects AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_FEDERATED_TOKEN_FILE
      automatically when the pod carries azure.workload.identity/use: "true".
@@ -43,7 +54,7 @@ securityContext:
 volumes:
   - name: scripts
     configMap:
-      name: osdu-spi-init-scripts
+      name: {{ include "osdu-spi-init.scriptsName" . }}
       defaultMode: 0755
 {{- if .Values.coreEnabled }}
   - name: partition-records

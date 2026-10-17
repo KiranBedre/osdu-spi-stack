@@ -455,6 +455,35 @@ spec:
       namespace: osdu-flux
 
 ---
+# Layer 5e: declarative Workflow service registrations. The registration
+# Jobs run only after partition and entitlement bootstrap grants the shared
+# workload identity its service roles.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: spi-osdu-workflows
+  namespace: osdu-flux
+  labels:
+    spi-stack.layer: "5"
+spec:
+  interval: 10m
+  dependsOn:
+    - name: spi-airflow
+    - name: spi-osdu-init
+  sourceRef:
+    kind: GitRepository
+    name: osdu-spi-stack-system
+  path: ./software/stacks/osdu/workflows
+  prune: true
+  wait: true
+  timeout: 15m
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: osdu-spi-workflows
+      namespace: osdu-flux
+
+---
 # Layer 5b: OSDU schema loader (one-shot Job). The healthCheck on the Job's
 # Complete condition is what lets spi-osdu-reference depend on a loaded
 # cluster.

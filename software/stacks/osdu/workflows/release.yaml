@@ -1,0 +1,37 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: osdu-spi-workflows
+  namespace: osdu-flux
+spec:
+  targetNamespace: osdu
+  interval: 30m
+  install:
+    timeout: 15m
+    remediation:
+      retries: 3
+  upgrade:
+    timeout: 15m
+    remediation:
+      retries: 3
+  chart:
+    spec:
+      chart: ./software/charts/osdu-spi-init
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: GitRepository
+        name: osdu-spi-stack-system
+  valuesFrom:
+    - kind: ConfigMap
+      name: spi-init-values
+      valuesKey: values.yaml
+  values:
+    coreEnabled: false
+    legalEnabled: false
+    membersEnabled: false
+    workflowsEnabled: true
+    workflowsGeneration: 1
+    workflows:
+      - name: segy-to-vds-conversion
+        dagName: segy-to-vds-conversion
+        description: Convert SEG-Y datasets to OpenVDS

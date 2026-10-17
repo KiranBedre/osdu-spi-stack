@@ -19,6 +19,7 @@ legalTag: demo-legaltag
 coreEnabled: true
 legalEnabled: true
 membersEnabled: true
+workflowsEnabled: false
 
 # -- Client id of the OSDU workload identity, the appid the services present
 #    on service-to-service calls. Written to the partition record as the tenant
@@ -40,6 +41,13 @@ entitlementsMemberUsers: []
 #    whose member list is unchanged still renders a fresh Job. Must equal
 #    ENTITLEMENTS_MEMBERS_GENERATION in the CLI, which computes the Job name.
 membersGeneration: 3
+
+# -- Declarative Workflow service registrations. A separate release enables
+#    this component after partition and entitlement bootstrap.
+workflows: []
+
+# -- Bump when a changed registration or script must rerun completed Jobs.
+workflowsGeneration: 1
 
 # -- Namespace where the Jobs run; the CLI bootstrap creates
 #    workload-identity-sa here.
@@ -87,6 +95,9 @@ legalActiveDeadlineSeconds: 3600
 # -- activeDeadlineSeconds for the members Jobs. init_members.py's worst case
 #    is 1710 s; test_members_deadline_covers_its_wait_budget recomputes it.
 membersActiveDeadlineSeconds: 1800
+
+# -- activeDeadlineSeconds for Workflow registration Jobs.
+workflowActiveDeadlineSeconds: 600
 
 # -- The scripts treat 409 as success, so a retried failure is a real error.
 backoffLimit: 2

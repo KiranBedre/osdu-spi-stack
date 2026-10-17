@@ -14,7 +14,7 @@
 
 apiVersion: v2
 name: osdu-spi-init
-description: OSDU SPI partition + entitlements bootstrap Jobs (one-shot, per-partition)
+description: OSDU SPI bootstrap and workflow registration Jobs
 type: application
-version: 0.4.0
+version: 0.5.0
 appVersion: "0.1.0"

@@ -24,11 +24,22 @@ spec:
         kind: HelmRepository
         name: apache-airflow
   values:
-    # Pinned so a chart bump cannot silently change the Airflow release.
+    # The Airflow and OpenVDS digests move together under ADR-043.
     airflowVersion: "3.2.2"
-    defaultAirflowTag: "3.2.2"
+    defaultAirflowRepository: ghcr.io/kiranbedre/osdu-spi-vds-converter
+    defaultAirflowDigest: sha256:5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa
+    images:
+      pod_template:
+        repository: ghcr.io/kiranbedre/osdu-spi-vds-converter@sha256
+        tag: 5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa
 
     executor: KubernetesExecutor
+
+    env:
+      - name: AIRFLOW_VAR_OPENVDS_INGESTION_IMAGE
+        value: ghcr.io/kiranbedre/osdu-spi-open-vds@sha256:4e5ae9565a864a1272010002ad01382810125839f38becd5ee2e3a8362f9fa2d
+      - name: AIRFLOW_VAR_CORE__SERVICE__SEISMIC__URL
+        value: http://seismic.osdu.svc.cluster.local/seistore-svc/api/v3
 
     postgresql:
       enabled: false
@@ -49,6 +60,30 @@ spec:
     workers:
       persistence:
         enabled: false
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: "platform"
+          effect: NoSchedule
+      nodeSelector:
+        spi-pool: platform
+      securityContexts:
+        pod:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        container:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
     logs:
       persistence:
         enabled: false
@@ -291,3 +326,8 @@ spec:
         # here leak into the auth manager's login redirect, which urljoins
         # against this value, sending the browser off the gateway.
         base_url: "/airflow"
+      kubernetes_executor:
+        # Chart 1.22 has no worker digest value and joins repository:tag.
+        # Splitting @sha256:<hex> across those fields preserves the digest.
+        worker_container_repository: ghcr.io/kiranbedre/osdu-spi-vds-converter@sha256
+        worker_container_tag: 5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa
