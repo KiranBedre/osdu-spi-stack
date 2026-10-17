@@ -14,10 +14,10 @@
 
 """Contract tests for the osdu-spi-init bootstrap chart.
 
-Renders the chart with Helm and asserts the per-partition Job fan-out and the
-legal-init contract, then executes the rendered init_legal.py against a
-routed fake of urlopen so every typed outcome is covered. Skipped when Helm
-is not installed.
+Renders the chart with Helm and asserts the per-partition Job fan-out,
+Workflow registration, and legal-init contract. It executes the rendered
+scripts against fakes where request behavior is load-bearing. Skipped when
+Helm is not installed.
 """
 
 import ast
@@ -51,14 +51,18 @@ CHART_DIR = REPO_ROOT / "software" / "charts" / "osdu-spi-init"
 pytestmark = pytest.mark.skipif(shutil.which("helm") is None, reason="Helm not installed")
 
 
-def _render(partitions: list[str], extra_sets: dict[str, str] | None = None) -> list[dict]:
+def _render(
+    partitions: list[str],
+    extra_sets: dict[str, str] | None = None,
+    release_name: str = "osdu-spi-init",
+) -> list[dict]:
     set_args = []
     for i, partition in enumerate(partitions):
         set_args += ["--set", f"partitions[{i}]={partition}"]
     for key, value in (extra_sets or {}).items():
         set_args += ["--set", f"{key}={value}"]
     result = run_process(
-        ["helm", "template", "osdu-spi-init", str(CHART_DIR), *set_args],
+        ["helm", "template", release_name, str(CHART_DIR), *set_args],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -170,6 +174,139 @@ def test_component_split_matches_the_three_releases():
     assert [doc["metadata"]["name"] for doc in members] == [
         entitlements_members_job_name("opendes", ["deployer-client-id"])
     ]
+
+
+def test_workflow_registration_is_a_separate_per_partition_release():
+    docs = _render(
+        ["opendes", "second"],
+        {
+            "coreEnabled": "false",
+            "legalEnabled": "false",
+            "membersEnabled": "false",
+            "workflowsEnabled": "true",
+            "workflows[0].name": "segy-to-vds-conversion",
+            "workflows[0].dagName": "segy-to-vds-conversion",
+            "workflows[0].description": "Convert SEG-Y datasets to OpenVDS",
+        },
+        release_name="osdu-spi-workflows",
+    )
+
+    configmap = next(doc for doc in docs if doc.get("kind") == "ConfigMap")
+    assert configmap["metadata"]["name"] == "osdu-spi-workflows-scripts"
+    assert "init_workflow.py" in configmap["data"]
+
+    jobs = _jobs(docs, "workflow-init")
+    assert [job["metadata"]["name"] for job in jobs] == [
+        "workflow-init-1-opendes-segy-to-vds-conversion",
+        "workflow-init-1-second-segy-to-vds-conversion",
+    ]
+    for job in jobs:
+        pod = job["spec"]["template"]["spec"]
+        assert pod["serviceAccountName"] == "workload-identity-sa"
+        assert pod["volumes"] == [
+            {
+                "name": "scripts",
+                "configMap": {
+                    "name": "osdu-spi-workflows-scripts",
+                    "defaultMode": 0o755,
+                },
+            }
+        ]
+        env = {entry["name"]: entry["value"] for entry in pod["containers"][0]["env"]}
+        assert env["WORKFLOW_NAME"] == "segy-to-vds-conversion"
+        assert env["DAG_NAME"] == "segy-to-vds-conversion"
+        assert job["metadata"]["labels"]["osdu.spi/partition"] == env["PARTITION"]
+
+
+def _workflow_script_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+) -> dict[str, object]:
+    monkeypatch.setenv("PARTITION", "opendes")
+    monkeypatch.setenv("WORKFLOW_NAME", "segy-to-vds-conversion")
+    monkeypatch.setenv("DAG_NAME", "segy-to-vds-conversion")
+    monkeypatch.setenv("WORKFLOW_DESCRIPTION", "Convert SEG-Y datasets to OpenVDS")
+
+    auth = types.ModuleType("auth")
+    setattr(auth, "get_token", lambda: "token")
+    wait = types.ModuleType("wait")
+    setattr(wait, "wait_for_status", lambda *args, **kwargs: True)
+    monkeypatch.setitem(sys.modules, "auth", auth)
+    monkeypatch.setitem(sys.modules, "wait", wait)
+
+    namespace: dict[str, object] = {"__name__": "workflow_init_test"}
+    exec(init_scripts["init_workflow.py"], namespace)
+    return namespace
+
+
+def test_workflow_registration_accepts_an_exact_existing_registration(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+):
+    namespace = _workflow_script_namespace(monkeypatch, init_scripts)
+    calls = []
+
+    def call(url, headers, method="GET", body=None):
+        calls.append((url, method, body))
+        return 200, json.dumps(
+            {
+                "workflowName": "segy-to-vds-conversion",
+                "registrationInstructions": {"dagName": "segy-to-vds-conversion"},
+            }
+        )
+
+    namespace["call"] = call
+
+    assert cast(Callable[[], int], namespace["main"])() == 0
+    assert [(method, body) for _, method, body in calls] == [("GET", None)]
+
+
+def test_workflow_registration_creates_a_missing_registration(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+):
+    namespace = _workflow_script_namespace(monkeypatch, init_scripts)
+    calls = []
+
+    def call(url, headers, method="GET", body=None):
+        calls.append((url, method, body))
+        if method == "GET":
+            return 404, ""
+        return 200, json.dumps(
+            {
+                "workflowName": "segy-to-vds-conversion",
+                "registrationInstructions": {"dagName": "segy-to-vds-conversion"},
+            }
+        )
+
+    namespace["call"] = call
+
+    assert cast(Callable[[], int], namespace["main"])() == 0
+    assert [method for _, method, _ in calls] == ["GET", "POST"]
+    payload = json.loads(calls[1][2])
+    assert payload == {
+        "workflowName": "segy-to-vds-conversion",
+        "description": "Convert SEG-Y datasets to OpenVDS",
+        "registrationInstructions": {"dagName": "segy-to-vds-conversion"},
+    }
+
+
+def test_workflow_registration_rejects_a_conflicting_dag(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+):
+    namespace = _workflow_script_namespace(monkeypatch, init_scripts)
+    namespace["call"] = lambda *args, **kwargs: (
+        200,
+        json.dumps(
+            {
+                "workflowName": "segy-to-vds-conversion",
+                "registrationInstructions": {"dagName": "different-dag"},
+            }
+        ),
+    )
+
+    assert cast(Callable[[], int], namespace["main"])() == 1
 
 
 def test_members_job_renders_one_per_partition_under_the_cli_computed_name():

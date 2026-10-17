@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 */}}
 
-{{- if .Values.coreEnabled }}
+{{- if or .Values.coreEnabled .Values.workflowsEnabled }}
 # Scripts shared by the init Jobs. auth.py exchanges the webhook-injected
 # federated token for a bearer whose appid is the OSDU UAMI; partition-azure
 # stores that appid as TenantInfo.service-account and entitlements authorises
@@ -13,7 +13,7 @@ you may not use this file except in compliance with the License.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: osdu-spi-init-scripts
+  name: {{ include "osdu-spi-init.scriptsName" . }}
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "osdu-spi-init.labels" . | nindent 4 }}
@@ -103,6 +103,108 @@ data:
             time.sleep(delay)
         print(f"ERROR: {url} did not return {expected} after {attempts} attempts")
         return False
+  init_workflow.py: |
+    """Register one preinstalled Airflow DAG with Workflow service."""
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    sys.path.insert(0, "/scripts")
+    from auth import get_token
+    from wait import wait_for_status
+
+    PARTITION = os.environ["PARTITION"]
+    WORKFLOW_NAME = os.environ["WORKFLOW_NAME"]
+    DAG_NAME = os.environ["DAG_NAME"]
+    DESCRIPTION = os.environ["WORKFLOW_DESCRIPTION"]
+    WORKFLOW_HOST = os.environ.get(
+        "WORKFLOW_HOST", "http://workflow.osdu.svc.cluster.local"
+    )
+    WORKFLOW_BASE = f"{WORKFLOW_HOST}/api/workflow/v1/workflow"
+    INFO_URL = f"{WORKFLOW_HOST}/api/workflow/v1/info"
+    GET_URL = f"{WORKFLOW_BASE}/{urllib.parse.quote(WORKFLOW_NAME, safe='')}"
+    ATTEMPTS = 150
+    RETRY_DELAY = 2.0
+
+
+    def call(
+        url: str,
+        headers: dict[str, str],
+        method: str = "GET",
+        body: bytes | None = None,
+    ) -> tuple[int, str]:
+        request = urllib.request.Request(url, data=body, method=method, headers=headers)
+        try:
+            response = urllib.request.urlopen(request, timeout=60)
+            return response.getcode(), response.read().decode(errors="replace")
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode(errors="replace")
+
+
+    def matches(payload: str) -> bool:
+        try:
+            metadata = json.loads(payload)
+        except json.JSONDecodeError:
+            print("ERROR: Workflow service returned invalid JSON")
+            return False
+        instructions = metadata.get("registrationInstructions") or {}
+        if metadata.get("workflowName") != WORKFLOW_NAME:
+            print("ERROR: Workflow service returned a different workflow name")
+            return False
+        if instructions.get("dagName") != DAG_NAME:
+            print(
+                "ERROR: Existing workflow points to "
+                f"{instructions.get('dagName')!r}, expected {DAG_NAME!r}"
+            )
+            return False
+        return True
+
+
+    def main() -> int:
+        print(f"Workflow registration for '{WORKFLOW_NAME}' in '{PARTITION}'")
+        if not wait_for_status(INFO_URL, {200}, attempts=600, delay=2.0):
+            return 1
+
+        token = get_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "data-partition-id": PARTITION,
+        }
+        body = json.dumps({
+            "workflowName": WORKFLOW_NAME,
+            "description": DESCRIPTION,
+            "registrationInstructions": {"dagName": DAG_NAME},
+        }).encode()
+
+        for attempt in range(1, ATTEMPTS + 1):
+            code, payload = call(GET_URL, headers)
+            if code == 200:
+                return 0 if matches(payload) else 1
+            if code == 404:
+                code, payload = call(WORKFLOW_BASE, headers, "POST", body)
+                if code in (200, 201):
+                    return 0 if matches(payload) else 1
+                if code == 409:
+                    continue
+            if code not in (401, 403, 500, 502, 503):
+                print(f"ERROR: Workflow API returned {code}: {payload}")
+                return 1
+            if attempt == 1 or attempt % 30 == 0:
+                print(f"  Workflow API returned {code} (attempt {attempt}/{ATTEMPTS})")
+            time.sleep(RETRY_DELAY)
+
+        print(f"ERROR: Workflow registration did not converge after {ATTEMPTS} attempts")
+        return 1
+
+
+    if __name__ == "__main__":
+        sys.exit(main())
   init_partition.py: |
     """Register a partition record with the partition service.
 

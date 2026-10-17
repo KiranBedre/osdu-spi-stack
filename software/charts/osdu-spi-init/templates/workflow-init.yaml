@@ -1,0 +1,60 @@
+{{/*
+Copyright 2026, Microsoft
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+*/}}
+
+{{- if .Values.workflowsEnabled }}
+{{- $root := . }}
+{{- range $partition := .Values.partitions }}
+{{- range $workflow := $root.Values.workflows }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "workflow-init-%d-%s-%s" (int $root.Values.workflowsGeneration) $partition $workflow.name | lower | replace "_" "-" | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "osdu-spi-init.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: workflow-init
+    osdu.spi/partition: {{ $partition | quote }}
+spec:
+  activeDeadlineSeconds: {{ $root.Values.workflowActiveDeadlineSeconds }}
+  backoffLimit: {{ $root.Values.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "osdu-spi-init.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: workflow-init
+        azure.workload.identity/use: "true"
+    spec:
+      {{- include "osdu-spi-init.podSpec" $root | nindent 6 }}
+      containers:
+        - name: register
+          image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: ["python", "/scripts/init_workflow.py"]
+          env:
+            - name: PARTITION
+              value: {{ $partition | quote }}
+            - name: WORKFLOW_NAME
+              value: {{ $workflow.name | quote }}
+            - name: DAG_NAME
+              value: {{ $workflow.dagName | quote }}
+            - name: WORKFLOW_DESCRIPTION
+              value: {{ $workflow.description | quote }}
+          resources:
+            {{- toYaml $root.Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+{{- end }}
+{{- end }}
+{{- end }}
