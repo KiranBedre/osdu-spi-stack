@@ -1,10 +1,10 @@
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: osdu-spi-workflows
+  name: osdu-spi-vds-dag
   namespace: osdu-flux
 spec:
-  targetNamespace: osdu
+  targetNamespace: platform
   interval: 30m
   install:
     timeout: 15m
@@ -29,9 +29,17 @@ spec:
     coreEnabled: false
     legalEnabled: false
     membersEnabled: false
-    workflowsEnabled: true
-    workflowsGeneration: 1
-    workflows:
-      - name: segy-to-vds-conversion
-        dagName: segy-to-vds-conversion
-        description: Convert SEG-Y datasets to OpenVDS
+    workflowsEnabled: false
+    namespace: platform
+    dagDelivery:
+      enabled: true
+      serviceName: segy-to-vds-conversion
+      artifact:
+        reference: >-
+          ghcr.io/kiranbedre/osdu-spi-vds-converter-dag@sha256:87d520c2dc631c0774074a96f527bb8fc53bc3c63b96d8c6594b9ec63e1d220b
+        dagFile: dag.zip
+        checksumFile: dag.zip.sha256
+        workflowFile: workflow.json
+      storage:
+        claimName: airflow-dags-writer
+        destination: services/segy-to-vds-conversion/vds_converter.zip

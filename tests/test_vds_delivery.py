@@ -21,6 +21,10 @@ OPENVDS_IMAGE = (
     "ghcr.io/kiranbedre/osdu-spi-open-vds@"
     "sha256:4e5ae9565a864a1272010002ad01382810125839f38becd5ee2e3a8362f9fa2d"
 )
+VDS_DAG_ARTIFACT = (
+    "ghcr.io/kiranbedre/osdu-spi-vds-converter-dag@"
+    "sha256:87d520c2dc631c0774074a96f527bb8fc53bc3c63b96d8c6594b9ec63e1d220b"
+)
 
 
 def test_airflow_pins_the_shared_runtime_and_openvds_task_image():
@@ -156,33 +160,51 @@ def test_airflow_profiles_substitute_dag_volume_resource_facts():
         ]
 
 
-def test_vds_workflow_registration_matches_the_baked_dag():
+def test_vds_dag_delivery_uses_the_service_owned_artifact():
     release = yaml.safe_load(WORKFLOW_RELEASE.read_text(encoding="utf-8"))
     values = release["spec"]["values"]
 
+    assert release["metadata"]["name"] == "osdu-spi-vds-dag"
+    assert release["spec"]["targetNamespace"] == "platform"
     assert values["coreEnabled"] is False
     assert values["legalEnabled"] is False
     assert values["membersEnabled"] is False
-    assert values["workflowsEnabled"] is True
-    assert values["workflows"] == [
-        {
-            "name": "segy-to-vds-conversion",
-            "dagName": "segy-to-vds-conversion",
-            "description": "Convert SEG-Y datasets to OpenVDS",
-        }
-    ]
+    assert values["workflowsEnabled"] is False
+    assert values["namespace"] == "platform"
+    assert values["dagDelivery"] == {
+        "enabled": True,
+        "serviceName": "segy-to-vds-conversion",
+        "artifact": {
+            "reference": VDS_DAG_ARTIFACT,
+            "dagFile": "dag.zip",
+            "checksumFile": "dag.zip.sha256",
+            "workflowFile": "workflow.json",
+        },
+        "storage": {
+            "claimName": "airflow-dags-writer",
+            "destination": "services/segy-to-vds-conversion/vds_converter.zip",
+        },
+    }
 
 
-def test_workflow_registration_waits_for_airflow_and_osdu_bootstrap():
+def test_vds_dag_delivery_waits_for_airflow_and_osdu_bootstrap():
     kustomizations = {
         doc["metadata"]["name"]: doc
         for doc in yaml.safe_load_all(CORE_STACK.read_text(encoding="utf-8"))
         if doc
     }
-    registration = kustomizations["spi-osdu-workflows"]
+    registration = kustomizations["spi-vds-dag"]
 
     assert registration["spec"]["path"] == "./software/stacks/osdu/workflows"
     assert {dependency["name"] for dependency in registration["spec"]["dependsOn"]} == {
         "spi-airflow",
         "spi-osdu-init",
     }
+    assert registration["spec"]["healthChecks"] == [
+        {
+            "apiVersion": "helm.toolkit.fluxcd.io/v2",
+            "kind": "HelmRelease",
+            "name": "osdu-spi-vds-dag",
+            "namespace": "osdu-flux",
+        }
+    ]
