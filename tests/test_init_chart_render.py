@@ -218,14 +218,113 @@ def test_workflow_registration_is_a_separate_per_partition_release():
         assert job["metadata"]["labels"]["osdu.spi/partition"] == env["PARTITION"]
 
 
+_DAG_ARTIFACT = (
+    "ghcr.io/kiranbedre/osdu-spi-vds-converter/dag@"
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
+
+def _dag_delivery_sets() -> dict[str, str]:
+    return {
+        "coreEnabled": "false",
+        "legalEnabled": "false",
+        "membersEnabled": "false",
+        "namespace": "platform",
+        "dagDelivery.enabled": "true",
+        "dagDelivery.serviceName": "segy-to-vds-conversion",
+        "dagDelivery.artifact.reference": _DAG_ARTIFACT,
+        "dagDelivery.artifact.dagFile": "vds_converter.zip",
+        "dagDelivery.artifact.checksumFile": "vds_converter.zip.sha256",
+        "dagDelivery.artifact.workflowFile": "workflow_request_body.json",
+        "dagDelivery.storage.destination": ("services/segy-to-vds-conversion/vds_converter.zip"),
+    }
+
+
+def test_dag_delivery_pulls_validates_publishes_and_registers_one_artifact():
+    docs = _render(
+        ["opendes", "second"],
+        _dag_delivery_sets(),
+        release_name="osdu-spi-vds-dag",
+    )
+    configmap = next(doc for doc in docs if doc.get("kind") == "ConfigMap")
+    assert configmap["metadata"]["name"] == "osdu-spi-vds-dag-scripts"
+    assert {"auth.py", "wait.py", "init_workflow.py", "publish_dag.py"} <= set(configmap["data"])
+
+    job = _jobs(docs, "dag-delivery")[0]
+    assert job["metadata"]["name"].startswith("dag-delivery-segy-to-vds-conversion-")
+    assert job["metadata"]["namespace"] == "platform"
+    pod = job["spec"]["template"]["spec"]
+    assert pod["serviceAccountName"] == "workload-identity-sa"
+    assert pod["securityContext"] == {
+        "runAsNonRoot": True,
+        "runAsUser": 65532,
+        "runAsGroup": 65532,
+        "fsGroup": 65532,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    assert pod["volumes"] == [
+        {
+            "name": "scripts",
+            "configMap": {
+                "name": "osdu-spi-vds-dag-scripts",
+                "defaultMode": 0o755,
+            },
+        },
+        {"name": "artifact", "emptyDir": {}},
+        {
+            "name": "airflow-dags",
+            "persistentVolumeClaim": {"claimName": "airflow-dags-writer"},
+        },
+    ]
+
+    pull = pod["initContainers"][0]
+    assert pull["image"] == (
+        "ghcr.io/oras-project/oras@"
+        "sha256:6ce045ce069a89934d6666b8b49f9c4c0145201bd6de6dbe2aee267814c55468"
+    )
+    assert pull["args"] == ["pull", _DAG_ARTIFACT, "--output", "/artifact"]
+    assert pull["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+    }
+
+    deliver = pod["containers"][0]
+    assert deliver["image"] == (
+        "python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+    )
+    script = deliver["args"][0]
+    assert script.startswith("python /scripts/publish_dag.py")
+    assert script.count("python /scripts/init_workflow.py") == 2
+    assert 'PARTITION="opendes"' in script
+    assert 'PARTITION="second"' in script
+    assert {entry["name"]: entry["value"] for entry in deliver["env"]} == {
+        "ARTIFACT_DIR": "/artifact",
+        "DAG_ROOT": "/dags",
+        "DAG_FILE": "vds_converter.zip",
+        "CHECKSUM_FILE": "vds_converter.zip.sha256",
+        "DAG_DESTINATION": "services/segy-to-vds-conversion/vds_converter.zip",
+        "WORKFLOW_FILE": "workflow_request_body.json",
+        "WORKFLOW_REQUEST_BODY_FILE": "/artifact/workflow_request_body.json",
+    }
+    rendered = json.dumps(job)
+    assert "clientSecret" not in rendered
+    assert "accountKey" not in rendered
+    assert "sasToken" not in rendered
+
+
 def _workflow_script_namespace(
     monkeypatch: pytest.MonkeyPatch,
     init_scripts: dict[str, str],
+    request_body: Path | None = None,
 ) -> dict[str, object]:
     monkeypatch.setenv("PARTITION", "opendes")
-    monkeypatch.setenv("WORKFLOW_NAME", "segy-to-vds-conversion")
-    monkeypatch.setenv("DAG_NAME", "segy-to-vds-conversion")
-    monkeypatch.setenv("WORKFLOW_DESCRIPTION", "Convert SEG-Y datasets to OpenVDS")
+    if request_body:
+        monkeypatch.setenv("WORKFLOW_REQUEST_BODY_FILE", str(request_body))
+    else:
+        monkeypatch.delenv("WORKFLOW_REQUEST_BODY_FILE", raising=False)
+        monkeypatch.setenv("WORKFLOW_NAME", "segy-to-vds-conversion")
+        monkeypatch.setenv("DAG_NAME", "segy-to-vds-conversion")
+        monkeypatch.setenv("WORKFLOW_DESCRIPTION", "Convert SEG-Y datasets to OpenVDS")
 
     auth = types.ModuleType("auth")
     setattr(auth, "get_token", lambda: "token")
@@ -291,6 +390,33 @@ def test_workflow_registration_creates_a_missing_registration(
     }
 
 
+def test_workflow_registration_posts_the_artifact_owned_request_body(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+    tmp_path: Path,
+):
+    registration = {
+        "workflowName": "segy-to-vds-conversion",
+        "description": "VDSConverter",
+        "registrationInstructions": {"dagName": "segy-to-vds-conversion"},
+    }
+    request_body = tmp_path / "workflow.json"
+    request_body.write_text(json.dumps([registration]), encoding="utf-8")
+    namespace = _workflow_script_namespace(monkeypatch, init_scripts, request_body)
+    calls = []
+
+    def call(url, headers, method="GET", body=None):
+        calls.append((method, body))
+        if method == "GET":
+            return 404, ""
+        return 201, json.dumps(registration)
+
+    namespace["call"] = call
+
+    assert cast(Callable[[], int], namespace["main"])() == 0
+    assert json.loads(calls[1][1]) == registration
+
+
 def test_workflow_registration_rejects_a_conflicting_dag(
     monkeypatch: pytest.MonkeyPatch,
     init_scripts: dict[str, str],
@@ -307,6 +433,104 @@ def test_workflow_registration_rejects_a_conflicting_dag(
     )
 
     assert cast(Callable[[], int], namespace["main"])() == 1
+
+
+def _publish_dag_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+    artifact_dir: Path,
+    dag_root: Path,
+) -> dict[str, object]:
+    monkeypatch.setenv("ARTIFACT_DIR", str(artifact_dir))
+    monkeypatch.setenv("DAG_ROOT", str(dag_root))
+    monkeypatch.setenv("DAG_FILE", "vds_converter.zip")
+    monkeypatch.setenv("CHECKSUM_FILE", "vds_converter.zip.sha256")
+    monkeypatch.setenv("WORKFLOW_FILE", "workflow_request_body.json")
+    monkeypatch.setenv(
+        "DAG_DESTINATION",
+        "services/segy-to-vds-conversion/vds_converter.zip",
+    )
+    namespace: dict[str, object] = {"__name__": "publish_dag_test"}
+    exec(init_scripts["publish_dag.py"], namespace)
+    return namespace
+
+
+def test_publish_dag_verifies_and_atomically_replaces_the_service_zip(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+    tmp_path: Path,
+):
+    artifact_dir = tmp_path / "artifact"
+    dag_root = tmp_path / "dags"
+    artifact_dir.mkdir()
+    dag_zip = artifact_dir / "vds_converter.zip"
+    with zipfile.ZipFile(dag_zip, "w") as archive:
+        archive.writestr("segy_to_vds.py", "DAG_ID = 'segy-to-vds-conversion'\n")
+    digest = hashlib.sha256(dag_zip.read_bytes()).hexdigest()
+    (artifact_dir / "vds_converter.zip.sha256").write_text(
+        f"{digest}  vds_converter.zip\n",
+        encoding="utf-8",
+    )
+    (artifact_dir / "workflow_request_body.json").write_text(
+        json.dumps(
+            [
+                {
+                    "workflowName": "segy-to-vds-conversion",
+                    "description": "VDSConverter",
+                    "registrationInstructions": {"dagName": "segy-to-vds-conversion"},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    destination = dag_root / "services" / "segy-to-vds-conversion" / "vds_converter.zip"
+    destination.parent.mkdir(parents=True)
+    destination.write_bytes(b"old")
+
+    namespace = _publish_dag_namespace(
+        monkeypatch,
+        init_scripts,
+        artifact_dir,
+        dag_root,
+    )
+    assert cast(Callable[[], int], namespace["main"])() == 0
+    assert destination.read_bytes() == dag_zip.read_bytes()
+    assert not list(destination.parent.glob("*.incoming"))
+
+
+def test_publish_dag_rejects_a_checksum_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    init_scripts: dict[str, str],
+    tmp_path: Path,
+):
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    dag_zip = artifact_dir / "vds_converter.zip"
+    with zipfile.ZipFile(dag_zip, "w") as archive:
+        archive.writestr("segy_to_vds.py", "pass\n")
+    (artifact_dir / "vds_converter.zip.sha256").write_text(
+        f"{'0' * 64}  vds_converter.zip\n",
+        encoding="utf-8",
+    )
+    (artifact_dir / "workflow_request_body.json").write_text(
+        json.dumps(
+            {
+                "workflowName": "segy-to-vds-conversion",
+                "description": "VDSConverter",
+                "registrationInstructions": {"dagName": "segy-to-vds-conversion"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    namespace = _publish_dag_namespace(
+        monkeypatch,
+        init_scripts,
+        artifact_dir,
+        tmp_path / "dags",
+    )
+
+    with pytest.raises(ValueError, match="checksum does not match"):
+        cast(Callable[[], int], namespace["main"])()
 
 
 def test_members_job_renders_one_per_partition_under_the_cli_computed_name():

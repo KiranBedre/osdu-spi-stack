@@ -25,16 +25,18 @@ Service task images remain separate immutable Airflow Variables.
 CSI volume to the existing `airflow-dags` container. Airflow mounts the claim
 through `platform:workload-identity-sa` with
 `mountWithWorkloadIdentityToken: "true"` and cache-disabled BlobFuse options.
-The Airflow HelmRelease and volume resolve the identity client ID, storage
-account, and resource group from `spi-cluster-config`.
+The same manifest exposes a writer-only claim for delivery Jobs; Airflow never
+mounts that claim. The Airflow HelmRelease and volumes resolve the identity
+client ID, storage account, and resource group from `spi-cluster-config`.
 
 Each service publishes one independently versioned OCI DAG artifact containing
 its rendered DAG zip, checksum, and Workflow registration body. A
-service-specific Flux Job pulls the exact artifact reference, writes only that
-service's files into the shared DAG container, verifies the checksum, and
-registers the matching Workflow after `spi-airflow` and `spi-osdu-init` are
-ready. Registration accepts an existing exact `dagName`, creates a missing
-registration, and fails on a conflicting registration.
+service-specific Flux release uses the generic DAG delivery Job in
+`osdu-spi-init` to pull the exact artifact reference, validate the checksum and
+zip, replace only that service's zip through the writer claim, and
+register the artifact-owned Workflow body after `spi-airflow` and
+`spi-osdu-init` are ready. Registration accepts an existing exact `dagName`,
+creates a missing registration, and fails on a conflicting registration.
 
 Conversion pods run in `platform` through `workload-identity-sa`. Their DAGs
 retain explicit requests, limits, non-root execution, RuntimeDefault seccomp,

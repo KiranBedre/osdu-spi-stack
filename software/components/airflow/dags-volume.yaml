@@ -42,3 +42,44 @@ spec:
       storage: 100Gi
   storageClassName: azureblob-fuse-premium
   volumeName: airflow-dags
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: airflow-dags-writer
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: azureblob-fuse-premium
+  mountOptions:
+    - -o allow_other
+    - -o direct_io
+    - -o uid=65532
+    - -o gid=65532
+    - -o umask=0022
+  csi:
+    driver: blob.csi.azure.com
+    volumeHandle: osdu-airflow-dags-writer-${COMMON_STORAGE_ACCOUNT_NAME}
+    volumeAttributes:
+      clientID: ${OSDU_IDENTITY_CLIENT_ID}
+      containerName: airflow-dags
+      mountWithWorkloadIdentityToken: "true"
+      resourceGroup: ${AZURE_RESOURCE_GROUP}
+      storageAccount: ${COMMON_STORAGE_ACCOUNT_NAME}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags-writer
+  namespace: platform
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: azureblob-fuse-premium
+  volumeName: airflow-dags-writer

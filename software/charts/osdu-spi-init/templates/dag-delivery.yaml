@@ -1,0 +1,106 @@
+{{/*
+Copyright 2026, Microsoft
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+*/}}
+
+{{- if .Values.dagDelivery.enabled }}
+{{- $delivery := .Values.dagDelivery }}
+{{- $serviceName := required "dagDelivery.serviceName is required" $delivery.serviceName }}
+{{- $artifactReference := required "dagDelivery.artifact.reference is required" $delivery.artifact.reference }}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $artifactReference) }}
+{{- fail "dagDelivery.artifact.reference must be pinned by sha256 digest" }}
+{{- end }}
+{{- $dagFile := required "dagDelivery.artifact.dagFile is required" $delivery.artifact.dagFile }}
+{{- $checksumFile := required "dagDelivery.artifact.checksumFile is required" $delivery.artifact.checksumFile }}
+{{- $workflowFile := required "dagDelivery.artifact.workflowFile is required" $delivery.artifact.workflowFile }}
+{{- $destination := required "dagDelivery.storage.destination is required" $delivery.storage.destination }}
+{{- $seed := printf "%s#%s#%s#%s#%s" $serviceName $artifactReference $dagFile $checksumFile $workflowFile }}
+{{- $hash := $seed | sha256sum | trunc 8 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "dag-delivery-%s-%s" $serviceName $hash | lower | replace "_" "-" | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "osdu-spi-init.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dag-delivery
+    osdu.spi/service: {{ $serviceName | quote }}
+spec:
+  activeDeadlineSeconds: {{ $delivery.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "osdu-spi-init.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dag-delivery
+        azure.workload.identity/use: "true"
+        osdu.spi/service: {{ $serviceName | quote }}
+    spec:
+      {{- include "osdu-spi-init.podSpec" . | nindent 6 }}
+      initContainers:
+        - name: pull
+          image: "{{ $delivery.artifact.pullImage.repository }}@{{ $delivery.artifact.pullImage.digest }}"
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/oras"]
+          args:
+            - pull
+            - {{ $artifactReference | quote }}
+            - --output
+            - /artifact
+          resources:
+            {{- toYaml .Values.dagDeliveryResources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: artifact
+              mountPath: /artifact
+      containers:
+        - name: deliver
+          image: "{{ $delivery.deliveryImage.repository }}@{{ $delivery.deliveryImage.digest }}"
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              python /scripts/publish_dag.py
+              {{- range $partition := .Values.partitions }}
+              PARTITION={{ $partition | quote }} \
+                python /scripts/init_workflow.py
+              {{- end }}
+          env:
+            - name: ARTIFACT_DIR
+              value: /artifact
+            - name: DAG_ROOT
+              value: /dags
+            - name: DAG_FILE
+              value: {{ $dagFile | quote }}
+            - name: CHECKSUM_FILE
+              value: {{ $checksumFile | quote }}
+            - name: DAG_DESTINATION
+              value: {{ $destination | quote }}
+            - name: WORKFLOW_FILE
+              value: {{ $workflowFile | quote }}
+            - name: WORKFLOW_REQUEST_BODY_FILE
+              value: {{ printf "/artifact/%s" $workflowFile | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: artifact
+              mountPath: /artifact
+              readOnly: true
+            - name: airflow-dags
+              mountPath: /dags
+{{- end }}

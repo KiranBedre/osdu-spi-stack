@@ -22,7 +22,7 @@ app.kubernetes.io/part-of: osdu
      Workflow registration owns a separate ConfigMap so its release can
      reconcile independently. */}}
 {{- define "osdu-spi-init.scriptsName" -}}
-{{- if .Values.workflowsEnabled -}}
+{{- if or .Values.workflowsEnabled .Values.dagDelivery.enabled -}}
 {{- printf "%s-scripts" .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else -}}
 osdu-spi-init-scripts
@@ -49,6 +49,11 @@ tolerations:
 {{- end }}
 securityContext:
   runAsNonRoot: true
+{{- if .Values.dagDelivery.enabled }}
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+{{- end }}
   seccompProfile:
     type: RuntimeDefault
 volumes:
@@ -56,6 +61,13 @@ volumes:
     configMap:
       name: {{ include "osdu-spi-init.scriptsName" . }}
       defaultMode: 0755
+{{- if .Values.dagDelivery.enabled }}
+  - name: artifact
+    emptyDir: {}
+  - name: airflow-dags
+    persistentVolumeClaim:
+      claimName: {{ .Values.dagDelivery.storage.claimName }}
+{{- end }}
 {{- if .Values.coreEnabled }}
   - name: partition-records
     configMap:

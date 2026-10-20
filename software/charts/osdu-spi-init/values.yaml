@@ -20,6 +20,24 @@ coreEnabled: true
 legalEnabled: true
 membersEnabled: true
 workflowsEnabled: false
+dagDelivery:
+  enabled: false
+  serviceName: ""
+  activeDeadlineSeconds: 900
+  artifact:
+    reference: ""
+    dagFile: ""
+    checksumFile: ""
+    workflowFile: ""
+    pullImage:
+      repository: ghcr.io/oras-project/oras
+      digest: sha256:6ce045ce069a89934d6666b8b49f9c4c0145201bd6de6dbe2aee267814c55468
+  storage:
+    claimName: airflow-dags-writer
+    destination: ""
+  deliveryImage:
+    repository: python
+    digest: sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 
 # -- Client id of the OSDU workload identity, the appid the services present
 #    on service-to-service calls. Written to the partition record as the tenant
@@ -84,6 +102,14 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+
+dagDeliveryResources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 
 # -- activeDeadlineSeconds for the core Jobs, a few HTTP POSTs.
 activeDeadlineSeconds: 600

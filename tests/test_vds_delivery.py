@@ -82,7 +82,9 @@ def test_airflow_pins_the_shared_runtime_and_openvds_task_image():
 
 
 def test_airflow_dag_volume_uses_read_only_workload_identity_blob_csi():
-    persistent_volume, claim = list(yaml.safe_load_all(DAGS_VOLUME.read_text(encoding="utf-8")))
+    persistent_volume, claim, writer_volume, writer_claim = list(
+        yaml.safe_load_all(DAGS_VOLUME.read_text(encoding="utf-8"))
+    )
     spec = persistent_volume["spec"]
     csi = spec["csi"]
 
@@ -113,6 +115,28 @@ def test_airflow_dag_volume_uses_read_only_workload_identity_blob_csi():
     assert claim["spec"]["accessModes"] == ["ReadOnlyMany"]
     assert claim["spec"]["storageClassName"] == "azureblob-fuse-premium"
     assert claim["spec"]["volumeName"] == "airflow-dags"
+
+    writer_spec = writer_volume["spec"]
+    assert writer_volume["metadata"]["name"] == "airflow-dags-writer"
+    assert writer_spec["accessModes"] == ["ReadWriteMany"]
+    assert writer_spec["persistentVolumeReclaimPolicy"] == "Retain"
+    assert writer_spec["storageClassName"] == "azureblob-fuse-premium"
+    assert writer_spec["mountOptions"] == [
+        "-o allow_other",
+        "-o direct_io",
+        "-o uid=65532",
+        "-o gid=65532",
+        "-o umask=0022",
+    ]
+    assert writer_spec["csi"]["driver"] == "blob.csi.azure.com"
+    assert writer_spec["csi"].get("readOnly") is None
+    assert writer_spec["csi"]["volumeAttributes"] == csi["volumeAttributes"]
+    assert writer_claim["metadata"] == {
+        "name": "airflow-dags-writer",
+        "namespace": "platform",
+    }
+    assert writer_claim["spec"]["accessModes"] == ["ReadWriteMany"]
+    assert writer_claim["spec"]["volumeName"] == "airflow-dags-writer"
 
 
 def test_airflow_profiles_substitute_dag_volume_resource_facts():

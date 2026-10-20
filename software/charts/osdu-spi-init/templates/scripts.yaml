@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 */}}
 
-{{- if or .Values.coreEnabled .Values.workflowsEnabled }}
+{{- if or .Values.coreEnabled .Values.workflowsEnabled .Values.dagDelivery.enabled }}
 # Scripts shared by the init Jobs. auth.py exchanges the webhook-injected
 # federated token for a bearer whose appid is the OSDU UAMI; partition-azure
 # stores that appid as TenantInfo.service-account and entitlements authorises
@@ -118,9 +118,39 @@ data:
     from wait import wait_for_status
 
     PARTITION = os.environ["PARTITION"]
-    WORKFLOW_NAME = os.environ["WORKFLOW_NAME"]
-    DAG_NAME = os.environ["DAG_NAME"]
-    DESCRIPTION = os.environ["WORKFLOW_DESCRIPTION"]
+
+
+    def load_registration() -> dict:
+        path = os.environ.get("WORKFLOW_REQUEST_BODY_FILE")
+        if not path:
+            return {
+                "workflowName": os.environ["WORKFLOW_NAME"],
+                "description": os.environ["WORKFLOW_DESCRIPTION"],
+                "registrationInstructions": {"dagName": os.environ["DAG_NAME"]},
+            }
+
+        with open(path, encoding="utf-8") as stream:
+            registration = json.load(stream)
+        if isinstance(registration, list):
+            if len(registration) != 1:
+                raise SystemExit("Workflow request body must contain exactly one registration")
+            registration = registration[0]
+        if not isinstance(registration, dict):
+            raise SystemExit("Workflow request body must be a JSON object")
+        instructions = registration.get("registrationInstructions")
+        required_strings = [
+            registration.get("workflowName"),
+            registration.get("description"),
+            instructions.get("dagName") if isinstance(instructions, dict) else None,
+        ]
+        if not all(isinstance(value, str) and value for value in required_strings):
+            raise SystemExit("Workflow request body is missing required string fields")
+        return registration
+
+
+    REGISTRATION = load_registration()
+    WORKFLOW_NAME = REGISTRATION["workflowName"]
+    DAG_NAME = REGISTRATION["registrationInstructions"]["dagName"]
     WORKFLOW_HOST = os.environ.get(
         "WORKFLOW_HOST", "http://workflow.osdu.svc.cluster.local"
     )
@@ -176,11 +206,7 @@ data:
             "Content-Type": "application/json",
             "data-partition-id": PARTITION,
         }
-        body = json.dumps({
-            "workflowName": WORKFLOW_NAME,
-            "description": DESCRIPTION,
-            "registrationInstructions": {"dagName": DAG_NAME},
-        }).encode()
+        body = json.dumps(REGISTRATION).encode()
 
         for attempt in range(1, ATTEMPTS + 1):
             code, payload = call(GET_URL, headers)
@@ -205,6 +231,119 @@ data:
 
     if __name__ == "__main__":
         sys.exit(main())
+  publish_dag.py: |
+    """Validate and atomically publish one service-owned Airflow DAG zip."""
+    import hashlib
+    import json
+    import os
+    import shutil
+    import sys
+    import zipfile
+    from pathlib import Path
+
+    ARTIFACT_ROOT = Path(os.environ.get("ARTIFACT_DIR", "/artifact"))
+    DAG_ROOT = Path(os.environ.get("DAG_ROOT", "/dags"))
+
+
+    def relative_path(value: str, label: str) -> Path:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError(f"{label} must be a relative path")
+        return path
+
+
+    def sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+
+    def expected_checksum(path: Path, dag_file: Path) -> str:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+        if len(lines) != 1:
+            raise ValueError("Checksum file must contain exactly one entry")
+        parts = lines[0].split()
+        if len(parts) != 2 or parts[1].lstrip("*") != dag_file.name:
+            raise ValueError("Checksum entry does not name the configured DAG zip")
+        digest = parts[0].lower()
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise ValueError("Checksum entry is not a SHA-256 digest")
+        return digest
+
+
+    def validate_zip(path: Path) -> None:
+        with zipfile.ZipFile(path) as archive:
+            members = [Path(name) for name in archive.namelist()]
+            if not members or not any(member.suffix == ".py" for member in members):
+                raise ValueError("DAG zip must contain at least one Python file")
+            if any(member.is_absolute() or ".." in member.parts for member in members):
+                raise ValueError("DAG zip contains an unsafe path")
+            corrupt_member = archive.testzip()
+            if corrupt_member:
+                raise ValueError(f"DAG zip contains a corrupt member: {corrupt_member}")
+
+
+    def validate_workflow(path: Path) -> None:
+        with path.open(encoding="utf-8") as stream:
+            registration = json.load(stream)
+        if isinstance(registration, list):
+            if len(registration) != 1:
+                raise ValueError("Workflow request body must contain one registration")
+            registration = registration[0]
+        instructions = (
+            registration.get("registrationInstructions")
+            if isinstance(registration, dict)
+            else None
+        )
+        required_strings = [
+            registration.get("workflowName") if isinstance(registration, dict) else None,
+            registration.get("description") if isinstance(registration, dict) else None,
+            instructions.get("dagName") if isinstance(instructions, dict) else None,
+        ]
+        if not all(isinstance(value, str) and value for value in required_strings):
+            raise ValueError("Workflow request body is missing required string fields")
+
+
+    def main() -> int:
+        dag_file = relative_path(os.environ["DAG_FILE"], "DAG_FILE")
+        checksum_file = relative_path(os.environ["CHECKSUM_FILE"], "CHECKSUM_FILE")
+        workflow_file = relative_path(os.environ["WORKFLOW_FILE"], "WORKFLOW_FILE")
+        destination = relative_path(os.environ["DAG_DESTINATION"], "DAG_DESTINATION")
+        source = ARTIFACT_ROOT / dag_file
+        checksum_path = ARTIFACT_ROOT / checksum_file
+
+        expected = expected_checksum(checksum_path, dag_file)
+        if sha256(source) != expected:
+            raise ValueError("DAG zip checksum does not match")
+        validate_zip(source)
+        validate_workflow(ARTIFACT_ROOT / workflow_file)
+
+        target = DAG_ROOT / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        incoming = target.with_name(f".{target.name}.incoming")
+        try:
+            with source.open("rb") as reader, incoming.open("wb") as writer:
+                shutil.copyfileobj(reader, writer)
+                writer.flush()
+                os.fsync(writer.fileno())
+            if sha256(incoming) != expected:
+                raise ValueError("Published DAG zip checksum does not match")
+            os.replace(incoming, target)
+        finally:
+            incoming.unlink(missing_ok=True)
+
+        print(f"Published DAG zip to {destination}")
+        return 0
+
+
+    if __name__ == "__main__":
+        try:
+            sys.exit(main())
+        except (OSError, ValueError, zipfile.BadZipFile) as error:
+            print(f"ERROR: {error}")
+            sys.exit(1)
   init_partition.py: |
     """Register a partition record with the partition service.
 
