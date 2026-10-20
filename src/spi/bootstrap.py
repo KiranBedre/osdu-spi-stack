@@ -34,6 +34,8 @@ ISTIO_REVISION_KEY = "ISTIO_REVISION"
 DEPLOY_IDENTITY_KEYS = (
     "DEPLOY_IDENTITY_CLIENT_ID",
     "DEPLOY_IDENTITY_PRINCIPAL_ID",
+    "OSDU_IDENTITY_CLIENT_ID",
+    "COMMON_STORAGE_ACCOUNT_NAME",
     "MEMBER_IDENTITY_CLIENT_ID",
     "NO_ACCESS_IDENTITY_CLIENT_ID",
     "SEISMIC_RESTORE_IDENTITY_CLIENT_ID",
@@ -49,10 +51,12 @@ DEPLOY_IDENTITY_KEYS = (
 def deploy_identity_facts(
     infra_outputs: dict, cluster_name: str, resource_group: str
 ) -> dict[str, str]:
-    """The spi-cluster-config entries that describe the environment deploy identity."""
+    """The spi-cluster-config entries that describe environment identities and resources."""
     return {
         "DEPLOY_IDENTITY_CLIENT_ID": infra_outputs.get("deploy_identity_client_id", ""),
         "DEPLOY_IDENTITY_PRINCIPAL_ID": infra_outputs.get("deploy_identity_principal_id", ""),
+        "OSDU_IDENTITY_CLIENT_ID": infra_outputs.get("identity_client_id", ""),
+        "COMMON_STORAGE_ACCOUNT_NAME": infra_outputs.get("common_storage_name", ""),
         "MEMBER_IDENTITY_CLIENT_ID": infra_outputs.get("member_identity_client_id", ""),
         "NO_ACCESS_IDENTITY_CLIENT_ID": infra_outputs.get("no_access_identity_client_id", ""),
         "SEISMIC_RESTORE_IDENTITY_CLIENT_ID": infra_outputs.get("restore_identity_client_id", ""),

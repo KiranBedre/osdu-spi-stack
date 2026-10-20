@@ -24,14 +24,13 @@ spec:
         kind: HelmRepository
         name: apache-airflow
   values:
-    # The Airflow and OpenVDS digests move together under ADR-043.
     airflowVersion: "3.2.2"
-    defaultAirflowRepository: ghcr.io/kiranbedre/osdu-spi-vds-converter
-    defaultAirflowDigest: sha256:5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa
+    defaultAirflowRepository: ghcr.io/kiranbedre/osdu-spi-airflow
+    defaultAirflowDigest: sha256:7a50601850488b35b8c257c4a062dbf5ce53c92c406c3fe578f027950f2ae67b
     images:
       pod_template:
-        repository: ghcr.io/kiranbedre/osdu-spi-vds-converter@sha256
-        tag: 5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa
+        repository: ghcr.io/kiranbedre/osdu-spi-airflow@sha256
+        tag: 7a50601850488b35b8c257c4a062dbf5ce53c92c406c3fe578f027950f2ae67b
 
     executor: KubernetesExecutor
 
@@ -58,6 +57,13 @@ spec:
     fernetKeySecretName: airflow-api-credentials
 
     workers:
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
+      kubernetes:
+        serviceAccount:
+          create: false
+          name: workload-identity-sa
       persistence:
         enabled: false
       resources:
@@ -93,6 +99,9 @@ spec:
     migrateDatabaseJob:
       enabled: true
       useHelmHooks: false
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
       resources:
         requests:
           cpu: 250m
@@ -123,6 +132,9 @@ spec:
     createUserJob:
       useHelmHooks: false
       applyCustomEnv: false
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
       args:
         - "bash"
         - "-c"
@@ -173,6 +185,9 @@ spec:
               - ALL
 
     apiServer:
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
       replicas: 1
       resources:
         requests:
@@ -200,6 +215,9 @@ spec:
               - ALL
 
     scheduler:
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
       replicas: 1
       resources:
         requests:
@@ -229,6 +247,9 @@ spec:
               - ALL
 
     dagProcessor:
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
       replicas: 1
       resources:
         requests:
@@ -259,6 +280,9 @@ spec:
 
     # Kept so deferrable operators remain available.
     triggerer:
+      serviceAccount:
+        create: false
+        name: workload-identity-sa
       persistence:
         enabled: false
       replicas: 1
@@ -314,8 +338,10 @@ spec:
             drop:
               - ALL
 
-    # git-sync is off: OSDU GitLab requires authentication.
     dags:
+      persistence:
+        enabled: true
+        existingClaim: airflow-dags
       gitSync:
         enabled: false
 
@@ -329,5 +355,5 @@ spec:
       kubernetes_executor:
         # Chart 1.22 has no worker digest value and joins repository:tag.
         # Splitting @sha256:<hex> across those fields preserves the digest.
-        worker_container_repository: ghcr.io/kiranbedre/osdu-spi-vds-converter@sha256
-        worker_container_tag: 5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa
+        worker_container_repository: ghcr.io/kiranbedre/osdu-spi-airflow@sha256
+        worker_container_tag: 7a50601850488b35b8c257c4a062dbf5ce53c92c406c3fe578f027950f2ae67b

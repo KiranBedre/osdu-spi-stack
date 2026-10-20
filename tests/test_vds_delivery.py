@@ -8,12 +8,14 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AIRFLOW_RELEASE = REPO_ROOT / "software" / "components" / "airflow" / "release.yaml"
+DAGS_VOLUME = REPO_ROOT / "software" / "components" / "airflow" / "dags-volume.yaml"
 WORKFLOW_RELEASE = REPO_ROOT / "software" / "stacks" / "osdu" / "workflows" / "release.yaml"
 CORE_STACK = REPO_ROOT / "software" / "stacks" / "osdu" / "profiles" / "core" / "stack.yaml"
+MINIMAL_STACK = REPO_ROOT / "software" / "stacks" / "osdu" / "profiles" / "minimal" / "stack.yaml"
 
-VDS_IMAGE = (
-    "ghcr.io/kiranbedre/osdu-spi-vds-converter@"
-    "sha256:5db47610ae2cb8aaefd97244fdcd8d2bbf9b121742d48a585e309f913013b9fa"
+AIRFLOW_IMAGE = (
+    "ghcr.io/kiranbedre/osdu-spi-airflow@"
+    "sha256:7a50601850488b35b8c257c4a062dbf5ce53c92c406c3fe578f027950f2ae67b"
 )
 OPENVDS_IMAGE = (
     "ghcr.io/kiranbedre/osdu-spi-open-vds@"
@@ -21,20 +23,41 @@ OPENVDS_IMAGE = (
 )
 
 
-def test_airflow_pins_the_vds_and_openvds_pair():
+def test_airflow_pins_the_shared_runtime_and_openvds_task_image():
     release = yaml.safe_load(AIRFLOW_RELEASE.read_text(encoding="utf-8"))
     values = release["spec"]["values"]
 
-    vds_repository, vds_digest = VDS_IMAGE.split("@", 1)
+    airflow_repository, airflow_digest = AIRFLOW_IMAGE.split("@", 1)
     assert values["airflowVersion"] == "3.2.2"
-    assert values["defaultAirflowRepository"] == vds_repository
-    assert values["defaultAirflowDigest"] == vds_digest
+    assert values["defaultAirflowRepository"] == airflow_repository
+    assert values["defaultAirflowDigest"] == airflow_digest
     executor = values["config"]["kubernetes_executor"]
     assert (
-        f"{executor['worker_container_repository']}:{executor['worker_container_tag']}" == VDS_IMAGE
+        f"{executor['worker_container_repository']}:{executor['worker_container_tag']}"
+        == AIRFLOW_IMAGE
     )
     pod_template = values["images"]["pod_template"]
-    assert f"{pod_template['repository']}:{pod_template['tag']}" == VDS_IMAGE
+    assert f"{pod_template['repository']}:{pod_template['tag']}" == AIRFLOW_IMAGE
+    assert values["dags"] == {
+        "persistence": {"enabled": True, "existingClaim": "airflow-dags"},
+        "gitSync": {"enabled": False},
+    }
+
+    service_account_consumers = [
+        values["workers"],
+        values["workers"]["kubernetes"],
+        values["migrateDatabaseJob"],
+        values["createUserJob"],
+        values["apiServer"],
+        values["scheduler"],
+        values["dagProcessor"],
+        values["triggerer"],
+    ]
+    for consumer in service_account_consumers:
+        assert consumer["serviceAccount"] == {
+            "create": False,
+            "name": "workload-identity-sa",
+        }
 
     env = {entry["name"]: entry["value"] for entry in values["env"]}
     assert env["AIRFLOW_VAR_OPENVDS_INGESTION_IMAGE"] == OPENVDS_IMAGE
@@ -56,6 +79,57 @@ def test_airflow_pins_the_vds_and_openvds_pair():
         "capabilities": {"drop": ["ALL"]},
     }
     assert "AZURE_CLIENT_SECRET" not in AIRFLOW_RELEASE.read_text(encoding="utf-8")
+
+
+def test_airflow_dag_volume_uses_read_only_workload_identity_blob_csi():
+    persistent_volume, claim = list(yaml.safe_load_all(DAGS_VOLUME.read_text(encoding="utf-8")))
+    spec = persistent_volume["spec"]
+    csi = spec["csi"]
+
+    assert persistent_volume["metadata"]["name"] == "airflow-dags"
+    assert spec["accessModes"] == ["ReadOnlyMany"]
+    assert spec["persistentVolumeReclaimPolicy"] == "Retain"
+    assert spec["storageClassName"] == "azureblob-fuse-premium"
+    assert csi["driver"] == "blob.csi.azure.com"
+    assert csi["readOnly"] is True
+    assert csi["volumeAttributes"] == {
+        "clientID": "${OSDU_IDENTITY_CLIENT_ID}",
+        "containerName": "airflow-dags",
+        "mountWithWorkloadIdentityToken": "true",
+        "resourceGroup": "${AZURE_RESOURCE_GROUP}",
+        "storageAccount": "${COMMON_STORAGE_ACCOUNT_NAME}",
+    }
+    assert spec["mountOptions"] == [
+        "-o allow_other",
+        "-o direct_io",
+        "--file-cache-timeout-in-seconds=0",
+        "--use-attr-cache=false",
+        "--invalidate-on-sync=true",
+        "--attr-timeout=0",
+        "--entry-timeout=0",
+        "--negative-timeout=0",
+    ]
+    assert claim["metadata"] == {"name": "airflow-dags", "namespace": "platform"}
+    assert claim["spec"]["accessModes"] == ["ReadOnlyMany"]
+    assert claim["spec"]["storageClassName"] == "azureblob-fuse-premium"
+    assert claim["spec"]["volumeName"] == "airflow-dags"
+
+
+def test_airflow_profiles_substitute_dag_volume_resource_facts():
+    for stack_path in [CORE_STACK, MINIMAL_STACK]:
+        kustomizations = {
+            doc["metadata"]["name"]: doc
+            for doc in yaml.safe_load_all(stack_path.read_text(encoding="utf-8"))
+            if doc
+        }
+        airflow = kustomizations["spi-airflow"]
+        assert airflow["spec"]["postBuild"]["substituteFrom"] == [
+            {
+                "kind": "ConfigMap",
+                "name": "spi-cluster-config",
+                "optional": False,
+            }
+        ]
 
 
 def test_vds_workflow_registration_matches_the_baked_dag():

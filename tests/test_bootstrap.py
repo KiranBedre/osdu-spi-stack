@@ -55,6 +55,8 @@ def test_render_cluster_config_carries_deploy_identity_facts():
         {
             "deploy_identity_client_id": "client",
             "deploy_identity_principal_id": "principal",
+            "identity_client_id": "osdu-client",
+            "common_storage_name": "osdudkscommon123",
             "no_access_identity_client_id": "noaccess",
             "restore_identity_client_id": "restore",
             "tenant_id": "tenant",
@@ -69,6 +71,8 @@ def test_render_cluster_config_carries_deploy_identity_facts():
     assert 'AZURE_RESOURCE_GROUP: "spi-stack-dks"' in yaml
     assert 'DEPLOY_IDENTITY_CLIENT_ID: "client"' in yaml
     assert 'DEPLOY_IDENTITY_PRINCIPAL_ID: "principal"' in yaml
+    assert 'OSDU_IDENTITY_CLIENT_ID: "osdu-client"' in yaml
+    assert 'COMMON_STORAGE_ACCOUNT_NAME: "osdudkscommon123"' in yaml
     assert 'NO_ACCESS_IDENTITY_CLIENT_ID: "noaccess"' in yaml
     assert 'SEISMIC_RESTORE_IDENTITY_CLIENT_ID: "restore"' in yaml
     assert 'ENABLE_SEISMIC_RESTORE: "true"' in yaml

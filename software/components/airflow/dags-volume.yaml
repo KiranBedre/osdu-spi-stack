@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: airflow-dags
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: azureblob-fuse-premium
+  mountOptions:
+    - -o allow_other
+    - -o direct_io
+    - --file-cache-timeout-in-seconds=0
+    - --use-attr-cache=false
+    - --invalidate-on-sync=true
+    - --attr-timeout=0
+    - --entry-timeout=0
+    - --negative-timeout=0
+  csi:
+    driver: blob.csi.azure.com
+    readOnly: true
+    volumeHandle: osdu-airflow-dags-${COMMON_STORAGE_ACCOUNT_NAME}
+    volumeAttributes:
+      clientID: ${OSDU_IDENTITY_CLIENT_ID}
+      containerName: airflow-dags
+      mountWithWorkloadIdentityToken: "true"
+      resourceGroup: ${AZURE_RESOURCE_GROUP}
+      storageAccount: ${COMMON_STORAGE_ACCOUNT_NAME}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags
+  namespace: platform
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: azureblob-fuse-premium
+  volumeName: airflow-dags

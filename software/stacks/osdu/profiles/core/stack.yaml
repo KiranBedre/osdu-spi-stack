@@ -293,6 +293,11 @@ spec:
   prune: true
   wait: true
   timeout: 15m
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: spi-cluster-config
+        optional: false
 
 ---
 # Layer 4: OSDU configuration placeholder
