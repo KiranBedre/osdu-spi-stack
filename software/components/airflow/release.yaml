@@ -37,6 +37,10 @@ spec:
     env:
       - name: AIRFLOW_VAR_OPENVDS_INGESTION_IMAGE
         value: ghcr.io/kiranbedre/osdu-spi-open-vds@sha256:4e5ae9565a864a1272010002ad01382810125839f38becd5ee2e3a8362f9fa2d
+      - name: AIRFLOW_VAR_ZGY_CONVERTER_IMAGE
+        value: ghcr.io/kiranbedre/osdu-spi-zgy-converter@sha256:91089d80ac2a8d7b5dada702b1e35d083be1f72bf82796570adde06a50794bfe
+      - name: AIRFLOW_VAR_ZGY_CONVERTER_AUTH_SCOPE
+        value: ${AAD_CLIENT_ID}/.default
       - name: AIRFLOW_VAR_CORE__SERVICE__SEISMIC__URL
         value: http://seismic.osdu.svc.cluster.local/seistore-svc/api/v3
 

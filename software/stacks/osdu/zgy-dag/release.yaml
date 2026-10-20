@@ -1,0 +1,45 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: osdu-spi-zgy-dag
+  namespace: osdu-flux
+spec:
+  targetNamespace: platform
+  interval: 30m
+  install:
+    timeout: 15m
+    remediation:
+      retries: 3
+  upgrade:
+    timeout: 15m
+    remediation:
+      retries: 3
+  chart:
+    spec:
+      chart: ./software/charts/osdu-spi-init
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: GitRepository
+        name: osdu-spi-stack-system
+  valuesFrom:
+    - kind: ConfigMap
+      name: spi-init-values
+      valuesKey: values.yaml
+  values:
+    coreEnabled: false
+    legalEnabled: false
+    membersEnabled: false
+    workflowsEnabled: false
+    namespace: platform
+    dagDelivery:
+      enabled: true
+      serviceName: segy-to-zgy-conversion
+      artifact:
+        reference: >-
+          ghcr.io/kiranbedre/osdu-spi-zgy-converter-dag@sha256:82d9d0df9621a4bcca7aeb0437639185151c06faa4c12e5d87d0a92301a5ab31
+        dagFile: dag.zip
+        checksumFile: dag.zip.sha256
+        workflowFile: workflow.json
+      storage:
+        claimName: airflow-dags-writer
+        destination: services/segy-to-zgy-conversion/zgy_converter.zip

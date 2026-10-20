@@ -64,6 +64,7 @@ def test_render_cluster_config_carries_deploy_identity_facts():
         },
         "spi-stack-dks",
         "spi-stack-dks",
+        "audience-client",
     )
 
     yaml = render_istio_revision_configmap("asm-1-30", facts)
@@ -72,6 +73,7 @@ def test_render_cluster_config_carries_deploy_identity_facts():
     assert 'DEPLOY_IDENTITY_CLIENT_ID: "client"' in yaml
     assert 'DEPLOY_IDENTITY_PRINCIPAL_ID: "principal"' in yaml
     assert 'OSDU_IDENTITY_CLIENT_ID: "osdu-client"' in yaml
+    assert 'AAD_CLIENT_ID: "audience-client"' in yaml
     assert 'COMMON_STORAGE_ACCOUNT_NAME: "osdudkscommon123"' in yaml
     assert 'NO_ACCESS_IDENTITY_CLIENT_ID: "noaccess"' in yaml
     assert 'SEISMIC_RESTORE_IDENTITY_CLIENT_ID: "restore"' in yaml
